@@ -63,7 +63,7 @@ Estep <-
                                                     item_data[,item],
                                                     pred_data,
                                                     samp_size)
-      } else if (item_type[item] == "2pl") {
+      } else if (item_type[item] %in% c("2pl","rasch")) {                       # Add Rasch items here
         itemtrace[[item]] <- bernoulli_traceline_pts(p[[item]],
                                                      theta,
                                                      pred_data,
@@ -95,7 +95,7 @@ Estep <-
 
         if(item_type[j] == "cfa") { # Continuous responses.
           posterior <- posterior*itemtrace[[j]][i,]
-        } else if(item_type[j] == "2pl") { # Binary responses.
+        } else if(item_type[item] %in% c("2pl","rasch")) { # Binary responses.  # Add Rasch items here
           if(x == 1) {
             posterior <- posterior*(1-itemtrace[[j]][i,])
           } else {
@@ -192,7 +192,7 @@ Estep_proxy <-
                                                           item_data[,item],
                                                           pred_data,
                                                           samp_size)
-      } else if (item_type[item] == "2pl") {
+      } else if (item_type[item] %in% c("2pl","rasch")) {
         itemtrace[[item]] <- bernoulli_traceline_pts_proxy(p[[item]],
                                                            prox_data,
                                                            pred_data)
@@ -222,7 +222,7 @@ Estep_proxy <-
 
         if(item_type[j] == "cfa") { # Continuous responses.
           posterior <- posterior*itemtrace[[j]][i,]
-        } else if(item_type[j] == "2pl") { # Binary responses.
+        } else if(item_type[item] %in% c("2pl","rasch")) { # Binary responses.
           if(x == 1) {
             posterior <- posterior*(1-itemtrace[[j]][i,])
           } else {

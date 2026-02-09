@@ -12,6 +12,8 @@
 #' response(s) are anchors (e.g., \code{anchor = 1}).
 #' @param stdz Logical value indicating whether to standardize DIF and
 #' impact predictors for regularization.
+#' @param free.theta.var Logical value indicating whether to freely estimate.   # Add option to free latent variance for rasch items
+#' the latent variance intercept (for \code{"rasch"} items).
 #' @param control Optional list of additional model specification and
 #' optimization parameters.
 #' @param call Defined from regDIF.
@@ -30,6 +32,7 @@ preprocess <-
            num.tau,
            anchor,
            stdz,
+           free.theta.var,                                                      # Add option to free latent variance for rasch items
            control,
            call){
 
@@ -166,8 +169,11 @@ preprocess <-
   # Get multiple characters of item.type for number of items.
   if(is.null(item.type)) {
     item_type <- sapply(1:num_items, function(item) {
-      if(num_responses[item] == 2) {
+      if(num_responses[item] == 2) {                                            # Add Rasch option if variance intercept is freed
         tmp = '2pl'
+        if (free.theta.var){
+          tmp = "rasch"
+        }
       } else if (num_responses[item] > 2 && num_responses[item] < 7) {
         tmp = 'graded'
       } else if (num_responses[item] > 6) {
@@ -177,6 +183,11 @@ preprocess <-
       })
   } else if(length(item.type) == 1) {
     item_type = rep(item.type, num_items)
+  }
+
+  # Latent variance intercept freed with any rasch items by default             # Add default behavior
+  if (is.null(final_control$free.theta.var)) {
+    final_control$free.theta.var <- any(item_type == "rasch")
   }
 
   # Get item response types.
@@ -212,8 +223,6 @@ preprocess <-
     }
   }
 
-
-
   # Define fixed quadrature points.
   theta <- seq(final_control$int.limits[1],
                final_control$int.limits[2], length.out = final_control$num.quad)
@@ -230,6 +239,22 @@ preprocess <-
     pred_data <- scale(pred_data)
     mean_predictors <- scale(mean_predictors)
     var_predictors <- scale(var_predictors)
+  }
+
+  # Add intercept column to var_predictors if rasch item type                   # Add column of 1's after zero-variance check
+  if (isTRUE(final_control$free.theta.var)) {
+    if (!any(item_type == "rasch")) {
+      warning(paste0("free.theta.var=TRUE requested, but no Rasch items detected;",
+                     "latent variance is not identifiable in a fully free-2PL model.",
+                     "Fixing theta variance to 1.", collapse = " "),
+              call. = FALSE, immediate. = TRUE)
+      final_control$free.theta.var <- FALSE
+    } else {
+      # Add intercept if not already present
+      if (!any(apply(var_predictors, 2, function(x) all(x == 1, na.rm = TRUE)))){           # Add only if column of 1's is not already present in var_predictors
+        var_predictors <- cbind("var_intercept" = 1, var_predictors)
+      }
+    }
   }
 
   # Penalty type.

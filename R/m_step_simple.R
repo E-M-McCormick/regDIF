@@ -453,7 +453,7 @@ Mstep_simple <-
 
 
         # Bernoulli responses.
-      } else if(item_type[item] == "2pl") {
+      } else if(item_type[item] %in% c("2pl","rasch")) {                                     # Might need to add rasch as an option here
 
 
           # Intercept updates.
@@ -482,7 +482,7 @@ Mstep_simple <-
 
 
         # Slope updates.
-        if(item_type[item] != "Rasch") {
+        if(item_type[item] != "rasch") {
 
             if(is.null(prox_data)) {
               anl_deriv <- d_bernoulli("a0",
@@ -536,7 +536,7 @@ Mstep_simple <-
             # End routine if only one anchor item is left on each covariate
             # for each item parameter.
             if(is.null(anchor) &
-               sum(p2[grep(paste0("c1(.*?)cov",cov),names(p2))] != 0) >
+               sum(p2[grep(paste("c1(.*?)cov",cov, sep = ""),names(p2))] != 0) >
                (num_items - 1) &
                alpha == 1 &&
                (length(final_control$start.values) == 0 || pen > 1) &&
@@ -605,7 +605,7 @@ Mstep_simple <-
               break
             }
 
-            if(item_type[item] != "Rasch") {
+            if(item_type[item] != "rasch") {
 
 
                 if(is.null(prox_data)) {

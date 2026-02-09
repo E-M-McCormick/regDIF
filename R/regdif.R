@@ -145,6 +145,7 @@ regDIF <- function(item.data,
                    alpha = 1,
                    gamma = 3,
                    anchor = NULL,
+                   free.theta.var = NULL,
                    stdz = TRUE,
                    control = list()) {
 
@@ -159,6 +160,7 @@ regDIF <- function(item.data,
                              num.tau,
                              anchor,
                              stdz,
+                             free.theta.var,
                              control,
                              call)
 

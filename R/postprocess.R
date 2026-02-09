@@ -111,7 +111,12 @@ postprocess <-
   }
 
   lv_parms <- c(p[[num_items+1]],p[[num_items+2]])
-  lv_names <- c(mean_names,var_names)
+
+  if(final_control$free.theta.var){
+    lv_names <- c(mean_names,"var.intercept",var_names)
+  } else {
+    lv_names <- c(mean_names,var_names)
+  }
 
   # Organize item baseline parameters.
   p2 <- unlist(p)

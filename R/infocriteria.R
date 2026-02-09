@@ -73,7 +73,7 @@ information_criteria <-
   observed_ll_dif <- 0
   for (item in 1:num_items) {
 
-    if(item_type[item] == "2pl") {
+    if(item_type[item] %in% c("2pl","rasch")) {
       if(is.null(prox_data)) {
         # Obtain E-tables for each response category.
         etable_item <- lapply(1:num_responses[item], function(x) etable)
