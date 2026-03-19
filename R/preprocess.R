@@ -1,4 +1,24 @@
-#' Pre-process data.
+###############################################################################
+# Data Preprocessing                                                          #
+#                                                                             #
+# Prepares raw user input for the penalized EM algorithm. Responsibilities:   #
+#   1. Handle missing data (listwise deletion)                                #
+#   2. Validate user inputs (item types, tau values, anchors)                 #
+#   3. Set up control parameters (tolerance, max iterations, quadrature)      #
+#   4. Determine item response types and number of response categories        #
+#   5. Standardize predictors if requested                                    #
+#   6. Initialize parameter starting values                                   #
+#   7. Set up storage matrices for results across the tau path                #
+#                                                                             #
+# The returned list contains everything needed by em_estimation() to run      #
+# the regularization path.                                                    #
+###############################################################################
+
+#' Pre-process data for the regDIF penalized EM algorithm.
+#'
+#' Validates inputs, handles missing data, determines item types,
+#' initializes parameters, and sets up control settings. Returns a
+#' comprehensive list used by \code{em_estimation} and \code{postprocess}.
 #'
 #' @param item.data Matrix or data frame of item responses.
 #' @param pred.data Matrix or data frame of DIF and/or impact predictors.
@@ -12,13 +32,15 @@
 #' response(s) are anchors (e.g., \code{anchor = 1}).
 #' @param stdz Logical value indicating whether to standardize DIF and
 #' impact predictors for regularization.
-#' @param free.theta.var Logical value indicating whether to freely estimate.   # Add option to free latent variance for rasch items
+#' @param free.theta.var Logical value indicating whether to freely estimate
 #' the latent variance intercept (for \code{"rasch"} items).
 #' @param control Optional list of additional model specification and
 #' optimization parameters.
 #' @param call Defined from regDIF.
 #'
-#' @return a \code{"list"} of default controls for \code{"em_estimation"}
+#' @return a \code{"list"} of default controls for \code{"em_estimation"},
+#'   including processed data, parameter starting values, item types,
+#'   quadrature settings, and storage matrices for results.
 #'
 #' @keywords internal
 #'
@@ -36,7 +58,8 @@ preprocess <-
            control,
            call){
 
-  # Remove observations with any NA.
+  # ---- Step 1: Handle missing data via listwise deletion ----
+  # Combine all data sources to identify any row with NA values.
   if(is.null(prox.data)) {
     combined.data <- cbind(pred.data, item.data)
   } else {
@@ -60,7 +83,8 @@ preprocess <-
 
   prox.data <- if(!is.null(prox.data)) prox.data[!NA_cases]
 
-  # Control parameters.
+  # ---- Step 2: Set up control parameters with defaults ----
+  # These can be overridden by user-supplied values in the control list.
   final_control <- list(impact.mean.data = pred.data,
                         impact.var.data = pred.data,
                         tol = 10^-5,
@@ -72,7 +96,7 @@ preprocess <-
                         start.values = list())
   if(length(control) > 0) final_control[names(control)] <- control
 
-  # Pre-process warnings.
+  # ---- Step 3: Input validation ----
   # if(final_control$optim.method == "CD" && final_control$parallel[[1]]) {
   #   stop(paste0("Parallel computing is not supported for coordinate descent. Use \"UNR\" or ",
   #               "\"MNR\" for binary item responses or \"UNR\" for categorical item responses."))
@@ -113,7 +137,10 @@ preprocess <-
     immediate. = TRUE)
   }
 
-  # Define number of tau values.
+  # ---- Step 4: Set up tau regularization path ----
+  # If tau is not user-supplied, start with a very large tau (all DIF removed)
+
+  # and identify the maximum tau automatically during the first EM run.
   if(is.null(tau)){
     tau_vec <- 1e20
     id_tau <- TRUE
@@ -123,7 +150,7 @@ preprocess <-
     id_tau <- FALSE
   }
 
-  # Speed up computation.
+  # ---- Step 5: Convert data to numeric matrices for computation ----
   item_data <- as.matrix(apply(as.matrix(item.data),2,as.numeric))
   pred_data <- as.matrix(apply(as.matrix(pred.data),2,as.numeric))
   prox_data <- if(!is.null(prox.data)) scale(as.matrix(as.numeric(prox.data)))
@@ -156,7 +183,7 @@ preprocess <-
   #   var_predictors <- var_predictors[,!(names(pred.data) %in% names(pred.data)[pred_data_no_var])]
   # }
 
-  # Get dimensions of data.
+  # ---- Step 6: Determine data dimensions ----
   samp_size <- dim(item_data)[1]
   num_items <- dim(item_data)[2]
   num_predictors <- dim(pred_data)[2]
@@ -166,7 +193,11 @@ preprocess <-
     as.vector(apply(item_data, 2, function(x) length(unique(na.omit(x)))))
 
 
-  # Get multiple characters of item.type for number of items.
+  # ---- Step 7: Determine item response types ----
+  # If item.type is NULL, auto-detect based on number of unique responses:
+  #   2 categories -> "2pl" (or "rasch" if free.theta.var is TRUE)
+  #   3-6 categories -> "graded" (ordinal)
+  #   7+ categories -> "cfa" (continuous/Gaussian)
   if(is.null(item.type)) {
     item_type <- sapply(1:num_items, function(item) {
       if(num_responses[item] == 2) {                                            # Add Rasch option if variance intercept is freed
@@ -185,12 +216,13 @@ preprocess <-
     item_type = rep(item.type, num_items)
   }
 
-  # Latent variance intercept freed with any rasch items by default             # Add default behavior
+  # Latent variance intercept freed with any Rasch items by default.
   if (is.null(final_control$free.theta.var)) {
     final_control$free.theta.var <- any(item_type == "rasch")
   }
 
-  # Get item response types.
+  # ---- Step 8: Recode categorical item responses to sequential integers ----
+  # Ensures response categories are numbered 1, 2, ..., J for internal use.
   cat_items <- item_type == 'rasch' |
                      item_type == '2pl' |
                      item_type == 'graded'
@@ -223,7 +255,7 @@ preprocess <-
     }
   }
 
-  # Define fixed quadrature points.
+  # ---- Step 9: Set up quadrature grid for latent variable approximation ----
   theta <- seq(final_control$int.limits[1],
                final_control$int.limits[2], length.out = final_control$num.quad)
 
@@ -234,14 +266,18 @@ preprocess <-
             immediate. = TRUE)
   }
 
-  # Standardize predictors.
+  # ---- Step 10: Standardize predictors if requested ----
+  # Recommended so that all DIF effects are on a comparable scale.
   if(stdz == TRUE){
     pred_data <- scale(pred_data)
     mean_predictors <- scale(mean_predictors)
     var_predictors <- scale(var_predictors)
   }
 
-  # Add intercept column to var_predictors if rasch item type                   # Add column of 1's after zero-variance check
+  # Add intercept column to var_predictors for Rasch models.
+  # This allows the latent variance to be freely estimated when slopes are
+  # constrained to 1 (Rasch), since a free variance intercept is needed
+  # for model identification in this case.
   if (isTRUE(final_control$free.theta.var)) {
     if (!any(item_type == "rasch")) {
       warning(paste0("free.theta.var=TRUE requested, but no Rasch items detected;",
@@ -257,18 +293,28 @@ preprocess <-
     }
   }
 
-  # Penalty type.
+  # ---- Step 11: Set penalty type (default: LASSO) ----
   if(is.null(pen.type)) {
     pen_type <- "lasso"
   } else {
     pen_type <- pen.type
   }
 
-  # Starting values.
+  # ---- Step 12: Initialize parameter starting values ----
+  # Parameter list structure: p[[1]]..p[[num_items]] = item parameters,
+  # p[[num_items+1]] = mean impact parameters, p[[num_items+2]] = variance impact parameters.
+  #
+  # Item parameter naming convention:
+  #   c0_itemI_intJ = base intercept/threshold for item I, threshold J
+  #   a0_itemI_     = base slope for item I
+  #   c1_itemI_covK = intercept DIF effect for item I, covariate K
+  #   a1_itemI_covK = slope DIF effect for item I, covariate K
+  #   s0_itemI_     = base residual variance (CFA items only)
+  #   s1_itemI_covK = residual variance DIF (CFA items only)
   p <- replicate(n=num_items+2,list(NA),simplify=F)
   for(item in 1:num_items){
 
-    # Different item response types.
+    # Set starting values based on item type.
     if(item_type[item] == "cfa") {
       p[[item]] <- c(mean(item_data[,item]),
                      sqrt(.5*var(item_data[,item])),
@@ -314,7 +360,7 @@ preprocess <-
   names(p[[(num_items+2)]]) <- paste0(rep(paste0('var',
                                                  1:ncol(var_predictors))))
 
-  # Update starting values if provided by the user.
+  # Override starting values if user-provided values exist in control$start.values.
   if(length(final_control$start.values) > 0) {
     for(parm in 1:ncol(mean_predictors)) {
       p[[(num_items+1)]][[parm]] <- final_control$start.values$impact[parm]
@@ -335,6 +381,9 @@ preprocess <-
     }
   }
 
+  # ---- Step 13: Set up storage matrices for results across tau path ----
+  # Count base parameters (intercepts, slopes, residuals) and DIF parameters
+  # to determine matrix dimensions for storing results.
   if(any(item_type == "cfa")){
     num_base_parms <- length(c(unlist(p)[grep('c0',names(unlist(p)))],
                                unlist(p)[grep('a0',names(unlist(p)))],

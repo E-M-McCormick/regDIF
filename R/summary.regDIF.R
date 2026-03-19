@@ -1,21 +1,33 @@
-#' Summary function for regDIF function
+###############################################################################
+# Summary Method for regDIF Objects                                           #
+#                                                                             #
+# Displays the optimal model from the regularization path (selected by        #
+# minimum AIC or BIC) and lists all non-zero DIF effects at that model.       #
+###############################################################################
+
+#' Summarize a fitted regDIF model.
+#'
+#' Displays the model call, the optimal tau value (minimizing AIC or BIC),
+#' and all non-zero DIF effects identified at the optimal model.
 #'
 #' @param object Fitted regDIF model object.
-#' @param method Fit statistic to use for displaying minimum tau model.
+#' @param method Character value indicating the fit statistic to minimize
+#'   for selecting the optimal model. Default is \code{"bic"}; may also be
+#'   \code{"aic"}.
 #' @param ... Additional arguments to be passed through \code{summary}.
 #'
 #' @rdname summary.regDIF
 #'
-#' @return \code{NULL}
+#' @return Invisibly returns \code{NULL}. Called for its side effect of printing.
 #' @export
 
 summary.regDIF <-
   function(object, method = "bic", ...) {
-    # Print to screen with line break.
+    # Display the original function call.
     cat("Call:\n")
-    # Print the model formula we fit.
     print(object$call)
-    # Create summary table to display results.
+
+    # Identify the optimal model and extract non-zero DIF effects.
     if(method == "aic") {
       sum_results <- c(object$tau_vec[which.min(object$aic)],
                        object$aic[which.min(object$aic)])
