@@ -1,4 +1,26 @@
-#' Maximization step.
+###############################################################################
+# Generic Maximization Step (M-step) Dispatcher                               #
+#                                                                             #
+# This file contains the original general-purpose M-step function that        #
+# supports multiple optimization methods (MNR, UNR, CD) within a single      #
+# function via the `method` parameter. This function is largely superseded    #
+# by the specialized M-step implementations in:                               #
+#   - m_step_simple.R (UNR: univariate Newton-Raphson, default)              #
+#   - m_step_block.R  (MNR: multivariate Newton-Raphson with blocks)         #
+#   - m_step_cd.r     (CD: single-pass coordinate descent)                   #
+#   - m_step_cd2.R    (CD: full coordinate descent to convergence)           #
+#                                                                             #
+# The function handles latent variable impact updates, item parameter         #
+# updates, DIF regularization via thresholding, and model identification      #
+# checks. It dispatches to different derivative functions based on the        #
+# optimization method and item type.                                          #
+###############################################################################
+
+#' Generic maximization step supporting multiple optimization methods.
+#'
+#' Performs the M-step of the penalized EM algorithm using the specified
+#' optimization method. Updates impact parameters and item parameters
+#' (base + DIF), applying penalty-specific thresholding to DIF effects.
 #'
 #' @param p List of parameters.
 #' @param item_data Matrix or data frame of item responses.
@@ -8,39 +30,34 @@
 #' impact equation.
 #' @param var_predictors Possibly different matrix of predictors for the
 #' variance impact equation.
-#' @param eout E-step output, including matrix for item and impact equations,
-#' in addition to theta values (possibly adaptive).
+#' @param eout E-step output, including posterior weights (etable) and
+#' quadrature points (theta).
 #' @param item_type Optional character value or vector indicating the type of
 #' item to be modeled.
 #' @param pen_type Character value indicating the penalty function to use.
-#' @param tau_current A single numeric value of tau that exists within
-#' \code{tau_vec}.
-#' @param pen Current penalty index.
-#' @param pen.deriv Logical value indicating whether to use the second
-#' derivative of the penalized parameter during regularization. The default is
-#' TRUE.
-#' @param alpha Numeric value indicating the alpha parameter in the elastic net
-#' penalty function.
-#' @param gamma Numeric value indicating the gamma parameter in the MCP
-#' function.
-#' @param anchor Optional numeric value or vector indicating which item
-#' response(s) are anchors (e.g., \code{anchor = 1}).
-#' @param final_control Control parameters.
-#' @param samp_size Sample size in data set.
-#' @param num_responses Number of responses for each item.
-#' @param num_items Number of items in data set.
-#' @param num_quad Number of quadrature points used for approximating the
-#' latent variable.
-#' @param num_predictors Number of predictors.
-#' @param num_tau Logical indicating whether the minimum tau value needs to be
-#' identified during the regDIF procedure.
-#' @param max_tau Logical indicating whether to output the minimum tau value
-#' needed to remove all DIF from the model.
-#' @param method Character value indicating the type of optimization method. Options include "MNR",
-#' "UNR", and "CD"
+#' @param tau_current A single numeric value of tau for the current model.
+#' @param pen Current penalty index along the tau path.
+#' @param pen.deriv Logical value indicating whether to incorporate the second
+#' derivative into the penalty (scales tau by the Hessian diagonal).
+#' @param alpha Numeric value for the elastic net mixing parameter.
+#' @param gamma Numeric value for the MCP concavity parameter.
+#' @param anchor Optional numeric vector of anchor item indices.
+#' @param final_control List of control parameters (tolerance, max iterations, etc.).
+#' @param samp_size Sample size.
+#' @param num_responses Vector of response counts per item.
+#' @param num_items Number of items.
+#' @param num_quad Number of quadrature points.
+#' @param num_predictors Number of DIF covariates.
+#' @param num_tau Total number of tau values in the regularization path.
+#' @param max_tau Logical: if TRUE, identify the maximum tau that removes all DIF
+#' instead of updating parameters.
+#' @param method Character value indicating the optimization method:
+#'   \code{"MNR"} (multivariate Newton-Raphson),
+#'   \code{"UNR"} (univariate Newton-Raphson), or
+#'   \code{"CD"} (coordinate descent).
 #'
-#' @return a \code{"list"} of estimates obtained from the maximization step using multivariate
-#' Newton-Raphson
+#' @return a \code{"list"} of estimates obtained from the maximization step,
+#'   or a numeric scalar (max tau value) when \code{max_tau = TRUE}.
 #'
 #' @importFrom foreach %dopar%
 #'
