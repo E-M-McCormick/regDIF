@@ -1,10 +1,33 @@
-#' Maximization step.
+###############################################################################
+# Information Criteria                                                        #
+#                                                                             #
+# Computes AIC and BIC for model selection across the regularization path.    #
+# The complete-data log-likelihood is computed as the sum of:                 #
+#   (1) The latent variable (impact) model log-likelihood                     #
+#   (2) The item response model log-likelihood                               #
+#                                                                             #
+# For the latent model, the complete-data LL uses posterior weights (E-table) #
+# to weight the normal density evaluated at quadrature points.               #
+# For items, the LL is computed using the appropriate traceline function.     #
+#                                                                             #
+# The number of free parameters excludes DIF parameters set to zero by       #
+# regularization, so the effective model complexity decreases as tau          #
+# increases.                                                                  #
+###############################################################################
+
+#' Compute information criteria (AIC, BIC) for model selection.
 #'
-#' @param eout E-table output.
-#' @param p List of parameters.
+#' Calculates complete-data log-likelihood and derives AIC/BIC values,
+#' accounting for the effective number of free parameters after
+#' regularization (DIF parameters shrunk to zero are excluded from
+#' the parameter count).
+#'
+#' @param eout E-step output containing posterior weights (etable) and
+#'   quadrature points (theta). NULL when using proxy data.
+#' @param p List of parameters (items + impact).
 #' @param item_data Matrix or data.frame of item responses.
 #' @param pred_data Matrix or data.frame of DIF and/or impact predictors.
-#' @param prox_data Vector of observed proxy scores.
+#' @param prox_data Vector of observed proxy scores (NULL for latent models).
 #' @param mean_predictors Possibly different matrix of predictors for the mean
 #' impact equation.
 #' @param var_predictors Possibly different matrix of predictors for the
@@ -19,7 +42,13 @@
 #' @param num_quad Number of quadrature points used for approximating the
 #' latent variable.
 #'
-#' @return a \code{"list"} of information criteria to use for model selection
+#' @return a \code{"list"} of information criteria to use for model selection:
+#'   \describe{
+#'     \item{aic}{Akaike Information Criterion: 2k - 2*LL}
+#'     \item{bic}{Bayesian Information Criterion: log(N)*k - 2*LL}
+#'     \item{complete_ll}{Complete-data log-likelihood value}
+#'     \item{observed_ll}{Observed-data log-likelihood value}
+#'   }
 #'
 #' @keywords internal
 #'
@@ -38,7 +67,9 @@ information_criteria <-
            num_items,
            num_quad) {
 
-  # Update theta and etable.
+  # Extract E-step outputs for latent variable models.
+  # theta_mat is an N x Q matrix replicating theta across persons,
+  # used for computing the observed-data log-likelihood.
   if(is.null(prox_data)) {
     theta <- eout$theta
     etable <- eout$etable
@@ -47,10 +78,16 @@ information_criteria <-
                           nrow=num_quad))
   }
 
-  # Obtain likelihood value for latent variable model
+  # ---- Latent variable (impact) model log-likelihood ----
+  # Compute person-specific latent mean and variance from impact model:
+  #   alpha_i = X_i' * beta_mean (conditional mean of theta)
+  #   phi_i = exp(X_i' * beta_var) (conditional variance of theta, log-link)
   alpha <- mean_predictors %*% p[[num_items+1]]
   phi <- exp(var_predictors %*% p[[num_items+2]])
 
+  # Evaluate normal density of the latent variable at each quadrature point.
+  # For latent models: weight by posterior (E-table) to get complete-data LL.
+  # For proxy models: directly use observed proxy scores.
   if(is.null(prox_data)) {
     prior_scores <- t(sapply(1:samp_size,
                              function(x) {
@@ -58,6 +95,7 @@ information_criteria <-
                                      mean = alpha[x],
                                      sd = sqrt(phi[x]))
                              }))
+    # Complete-data LL: sum of posterior-weighted log-densities.
     complete_ll_impact <- sum(etable*log(prior_scores), na.rm = TRUE)
   } else {
     prior_scores <- dnorm(prox_data,
@@ -68,7 +106,9 @@ information_criteria <-
 
   observed_ll_impact <- sum(log(prior_scores), na.rm = TRUE)
 
-  # Obtain likelihood value for item responses
+  # ---- Item response model log-likelihood ----
+  # Loop over items and compute the complete-data LL contribution from
+  # each item, using the appropriate traceline function for the item type.
   complete_ll_dif <- 0
   observed_ll_dif <- 0
   for (item in 1:num_items) {
@@ -233,16 +273,23 @@ information_criteria <-
 
 
 
-  # Remove DIF parameters that equal zero from information crit calculation.
+  # ---- Effective parameter count and information criteria ----
+  # Count only non-zero parameters for the penalty term:
+  # - Base parameters (c0, a0) are always counted as free.
+  # - DIF parameters (c1, a1) are only counted if non-zero (not regularized out).
+  # - Impact parameters are always counted.
   p2 <- unlist(p)
   p2_base <- p2[c(grep("c0",names(p2)),grep("a0",names(p2)))]
   p2_cov <- p2[c(grep("c1",names(p2)),grep("a1",names(p2)))]
   p2_cov <- p2_cov[p2_cov != 0]
   p2 <- c(p2_base,p2_cov,p[[num_items+1]],p[[num_items+2]])
+
+  # Sum impact and item LL contributions.
   complete_ll <- complete_ll_impact + complete_ll_dif
   observed_ll <- observed_ll_impact + observed_ll_dif
 
-  # Compute AIC and BIC.
+  # Compute AIC = 2k - 2*LL and BIC = log(N)*k - 2*LL,
+  # where k = number of effective (non-zero) free parameters.
   aic <- 2*length(p2) - 2*complete_ll
   bic <- log(samp_size)*length(p2) - 2*complete_ll
 

@@ -1,31 +1,51 @@
-#' Plot function for regDIF function
+###############################################################################
+# Plot Method for regDIF Objects                                              #
+#                                                                             #
+# Creates a regularization path plot showing how DIF parameter estimates      #
+# change across values of log(tau). Non-zero DIF effects at the optimal       #
+# model (min AIC/BIC) are highlighted with colored lines, while zero          #
+# effects are shown in gray. A vertical dashed line marks the optimal tau.    #
+###############################################################################
+
+#' Plot the regularization path for a fitted regDIF model.
+#'
+#' Creates a line plot showing DIF parameter estimates as a function of
+#' log(tau). Effects that are non-zero at the optimal model are highlighted
+#' with distinct colors and line types; zero effects are shown in gray.
 #'
 #' @param x Fitted regDIF model object.
-#' @param y Unused for plotting regDIF model object.
-#' @param method Fit statistic to use for identifying DIF effects in plot.
-#' @param color.seed Random seed to sample line colors and line types for
-#' DIF effects in plot.
-#' @param legend.plot Logical indicating whether to plot a legend. Default is \code{TRUE}.
+#' @param y Unused; included for S3 method compatibility.
+#' @param method Character value indicating which fit statistic to use
+#'   for identifying the optimal model. Default is \code{"bic"}.
+#' @param color.seed Integer random seed for sampling line colors and
+#'   line types for non-zero DIF effects. Default is 123.
+#' @param legend.plot Logical indicating whether to include a legend
+#'   identifying non-zero DIF effects. Default is \code{TRUE}.
 #' @param ... Additional arguments to be passed through to \code{plot}.
 #'
 #' @rdname plot.regDIF
 #'
 #' @importFrom graphics abline legend lines plot
 #'
-#' @return a \code{"plot"} object for a \code{"regDIF"} fit
+#' @return Invisibly returns \code{NULL}. Called for its side effect of plotting.
 #'
 #' @export
 #'
 plot.regDIF <-
   function(x, y = NULL, method = "bic", color.seed = 123, legend.plot = TRUE, ...) {
 
+    # Transform tau to log scale for more interpretable x-axis.
     tau <- log(x$tau_vec)
     if(length(tau) < 2) stop(
       paste0("Must run multiple tau values to plot."),
       call. = TRUE)
+
+    # Extract intercept and slope DIF parameters across the tau path.
     dif.parms <- x$dif[grep(paste0(c("int","slp"),
                                                    collapse = "|"),
                                             rownames(x$dif)), ]
+
+    # Identify the optimal tau and which DIF effects are non-zero there.
     min.tau <- tau[which.min(unlist(x[method]))]
     dif.min.tau <- dif.parms[,which(tau == min.tau)]
     nonzero.dif <- dif.min.tau[!(dif.min.tau == 0)]
@@ -40,6 +60,9 @@ plot.regDIF <-
     #     }
     #   }
 
+    # Draw the base plot with a horizontal zero line.
+    # X-axis is reversed (large tau on left, small on right) to show
+    # the regularization path from most to least penalized.
     plot(tau,
          rep(0,length(tau)),
          type = 'l',
@@ -48,8 +71,11 @@ plot.regDIF <-
          main = "Regularization Path",
          xlab = expression(log(tau)),
          ylab = "Estimate")
+    # Vertical dashed line at the optimal tau.
     abline(v = min.tau, lty = 2)
 
+      # Draw each DIF parameter's path across tau values.
+      # Non-zero effects at optimal tau get colored lines; zero effects are gray.
       dif.lines <- matrix(NA,ncol=2,nrow=nrow(dif.parms))
       for(i in 1:nrow(dif.parms)){
         if(rownames(dif.parms)[i] %in% names(nonzero.dif)){

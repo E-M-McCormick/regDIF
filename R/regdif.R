@@ -149,7 +149,9 @@ regDIF <- function(item.data,
                    stdz = TRUE,
                    control = list()) {
 
-    # Pre-process data.
+    # ---- Step 1: Pre-process data ----
+    # Validates inputs, handles missing data, initializes parameters, and
+    # sets up the regularization path structure.
     call <- match.call()
     data_scrub <- preprocess(item.data,
                              pred.data,
@@ -164,11 +166,13 @@ regDIF <- function(item.data,
                              control,
                              call)
 
-    # Run Reg-DIF for each value of tau.
+    # ---- Step 2: Run penalized EM for each tau value ----
+    # The regularization path proceeds from the largest tau (all DIF removed)
+    # to the smallest tau (most DIF effects included). Each iteration uses
+    # warm starts from the previous tau's converged estimates.
     for(pen in 1:data_scrub$num_tau){
-      # for(pen in 1:10){
 
-      # Obtain regDIF estimates.
+      # Run the penalized EM algorithm for the current tau value.
       estimates <- em_estimation(data_scrub$p,
                                  data_scrub$item_data,
                                  data_scrub$pred_data,
@@ -215,8 +219,10 @@ regDIF <- function(item.data,
 
       data_scrub$exit_code <- data_scrub$exit_code + estimates$exit_code
 
-      # Update vector of tau values based on identification of minimum tau value
-      # which removes all DIF from the model.
+      # ---- Step 3: Construct tau sequence (first iteration only) ----
+      # On the first pass, the maximum tau that removes all DIF is identified.
+      # Then a cube-root-spaced sequence from max_tau to 0 is created,
+      # placing more values near zero where DIF effects change rapidly.
       if(data_scrub$id_tau & !is.null(estimates)) {
 
         # if(data_scrub$optim_method == "MNR") {
@@ -234,7 +240,9 @@ regDIF <- function(item.data,
       }
 
 
-      # Post-process data.
+      # ---- Step 4: Post-process results for this tau value ----
+      # Organizes raw estimates into named vectors, computes information
+      # criteria, and stores results in the accumulating output list.
       data_final <- postprocess(estimates,
                                 item.data,
                                 pred.data,
@@ -262,7 +270,8 @@ regDIF <- function(item.data,
 
 
 
-      # EM limit.
+      # ---- Step 5: Check for early stopping conditions ----
+      # MCP penalty can become non-convex, causing EM instability.
       if(estimates$estimator_limit & (data_scrub$pen_type == "mcp" ||
                                        data_scrub$pen_type == "grp.mcp")) {
         warning("regDIF procedure stopped because MCP penalty is likely non-convex in this region.",
@@ -280,7 +289,9 @@ regDIF <- function(item.data,
       }
 
 
-      # Update parameter estimates for next tau value.
+      # ---- Step 6: Warm start for next tau value ----
+      # Use converged parameter estimates as starting values for the next
+      # (smaller) tau, enabling faster convergence along the path.
       data_scrub$p <- estimates$p
       data_scrub$final <- data_final
 
@@ -289,7 +300,8 @@ regDIF <- function(item.data,
 
 
 
-  # Obtain final results.
+  # ---- Step 7: Return final results ----
+  # Assign the regDIF S3 class for method dispatch (print, summary, plot, coef).
   class(data_final) <- "regDIF"
   cat("\n")
   return(data_final)

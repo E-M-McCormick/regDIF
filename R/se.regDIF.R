@@ -1,6 +1,21 @@
+###############################################################################
+# Standard Error Computation for regDIF Models                                #
+#                                                                             #
+# Implements the Supplemental EM (SEM) algorithm (Cai, 2008) for computing   #
+# standard errors of regDIF parameter estimates. The SEM algorithm            #
+# approximates the observed information matrix by numerically computing       #
+# the Jacobian of the EM mapping function at the MLE.                         #
+#                                                                             #
+# NOTE: This function is still in development and is not yet supported.       #
+# It is exported as internal only.                                            #
+###############################################################################
+
 #' Standard Errors for regDIF Model(s)
 #'
-#' Obtain standard errors for regDIF model(s).
+#' Computes standard errors for regDIF model parameters using the
+#' Supplemental EM (SEM) algorithm (Cai, 2008). The SEM algorithm
+#' numerically approximates the Jacobian of the EM mapping function
+#' to recover the observed information matrix from the EM history.
 #'
 #' @usage
 #' se.regDIF(fit,
@@ -12,15 +27,21 @@
 #' Upon designating \code{fit}, the default is to obtain standard errors
 #' for the best-fitting model according to the minimum BIC model.
 #' @param se.type Character value indicating the method of computing standard
-#' errors for a regDIF fitted model. Default is "sem", or the supplemental EM
-#' algorithm (see Cai, 2008). Other options are in development and not yet
+#' errors for a regDIF fitted model. Default is \code{"sem"}, the supplemental
+#' EM algorithm (Cai, 2008). Other options are in development and not yet
 #' supported.
 #' @param tau Optional numeric or vector of tau values corresponding to those
 #' already fit in \code{fit}.
 #' @param ... Additional arguments to pass to regDIF function if different
 #' settings are desired.
 #'
-#' @return Function returns an object of class \code{se.regDIF}
+#' @return Function returns an object of class \code{se.regDIF} containing
+#'   standard errors for all non-zero parameters.
+#'
+#' @references
+#' Cai, L. (2008). SEM of another flavour: Two new applications of the
+#' supplemented EM algorithm. \emph{British Journal of Mathematical and
+#' Statistical Psychology}, 61, 309-329.
 #'
 #' @import stats utils
 #'
@@ -100,13 +121,20 @@ se.regDIF <- function(fit,
                              control,
                              call)
 
-    # Obtain EM history of minimum BIC model from regDIF model object.
+    # ---- SEM Algorithm Implementation ----
+    # The SEM approach recovers the observed information matrix by computing
+    # the Jacobian of the EM mapping M(theta) at the MLE. The key identity is:
+    #   I_obs = I_complete * (I - J_M)
+    # where J_M is the Jacobian of the EM map, and I_complete is the
+    # complete-data information matrix.
+
+    # Extract the EM iteration history for the optimal (min BIC) model.
     em_history <- fit$em_history[[which.min(fit$bic)]]
 
-    # Obtain MLEs from EM history.
+    # The MLE is the final column of the EM history.
     mle <- em_history[,ncol(em_history)]
 
-    # Organize MLEs.
+    # Organize MLEs into the parameter list structure.
     mle_organized <- data_scrub$p
     for(item in 1:data_scrub$num_items) {
       mle_organized[[item]] <- mle[grep(paste0("item",item),names(mle))]
@@ -119,12 +147,16 @@ se.regDIF <- function(fit,
     # Save MLEs to EM map.
     em_map <- mle_organized
 
-    # Obtain index of SEM "sweet-spot" according to Tian, Cai, et al. (2012).
+    # Identify EM iterations in the "sweet-spot" (Tian, Cai, et al., 2012).
+    # The SEM algorithm works best with EM iterations that have moderate
+    # convergence rates (between 0.9 and 0.999 on the exp(-diff(LL)) scale).
     obs_ll <- em_history[nrow(em_history),]
     obs_ll_exp_diff <- exp(-diff(obs_ll))
     sem_sweet_spot <- which(obs_ll_exp_diff > .9 & obs_ll_exp_diff < .999)
 
-    # Make space for Jacobian of EM map.
+    # Allocate storage for the Jacobian of the EM map.
+    # Each diagonal element of J_M is estimated by perturbing one parameter
+    # at a time and measuring the resulting change in the EM map output.
     em_map_jacobian <- last_em_map_jacobian <- eps <- stand_err <- data_scrub$p
     for(item in 1:data_scrub$num_items) {
       em_map_jacobian[[item]][[2]] <-
@@ -272,7 +304,9 @@ se.regDIF <- function(fit,
 
     }
 
-    # Obtain SEs using EM map.
+    # ---- Compute standard errors from the EM map Jacobian ----
+    # SE = sqrt(I_complete^{-1}) * 1/(1 - J_M), combining complete-data
+    # information with the SEM rate-of-convergence correction.
     complete_info <- fit$complete_ll_info
     for(parm_vector in 1:length(complete_info)) {
       for(parm in 1:length(complete_info[[parm_vector]])) {
