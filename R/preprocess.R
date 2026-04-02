@@ -103,6 +103,8 @@ preprocess <-
   # }
   if(!(any(item.type == "rasch") ||
        any(item.type == "2pl") ||
+       # any(item.type == "3pl") || # flagged for future inclusion
+       # any(item.type == "4pl") ||
        any(item.type == "graded") ||
        any(item.type == "cfa") ||
        any(is.null(item.type)))) {
@@ -139,7 +141,6 @@ preprocess <-
 
   # ---- Step 4: Set up tau regularization path ----
   # If tau is not user-supplied, start with a very large tau (all DIF removed)
-
   # and identify the maximum tau automatically during the first EM run.
   if(is.null(tau)){
     tau_vec <- 1e20
@@ -214,6 +215,9 @@ preprocess <-
       })
   } else if(length(item.type) == 1) {
     item_type = rep(item.type, num_items)
+  } else {
+    # item.type is a vector of length > 1: use it directly.
+    item_type = item.type
   }
 
   # Latent variance intercept freed with any Rasch items by default.
@@ -287,7 +291,7 @@ preprocess <-
       final_control$free.theta.var <- FALSE
     } else {
       # Add intercept if not already present
-      if (!any(apply(var_predictors, 2, function(x) all(x == 1, na.rm = TRUE)))){           # Add only if column of 1's is not already present in var_predictors
+      if (!any(apply(var_predictors, 2, function(x) all(x == 1, na.rm = TRUE)))){
         var_predictors <- cbind("var_intercept" = 1, var_predictors)
       }
     }
@@ -299,6 +303,41 @@ preprocess <-
   } else {
     pen_type <- pen.type
   }
+
+  # ---- Step 11b: Parse DIF group definitions for group penalties ----
+  # This sets up the group infrastructure (covariate groupings, per-item
+  # weights, pre-computed parameter indices) used by the M-step for group
+  # penalties (grp.lasso, grp.mcp). For scalar penalties, this stores only
+  # the family overrides (if any) so the M-step knows which families to
+  # skip or estimate freely.
+  #
+  # NOTE: At this point we have num_items, num_predictors, item_type, and
+
+  # num_responses finalized, which are all required by parse_dif_groups().
+  group_spec <- parse_dif_groups(
+    dif_groups        = control$dif.groups,
+    dif_group_mode    = control$dif.group.mode,
+    dif_group_weights = control$dif.group.weights,
+    dif_families      = control$dif.families,
+    pred_data         = pred_data,
+    pen_type          = pen_type,
+    num_predictors    = num_predictors,
+    item_type         = item_type,
+    num_items         = num_items,
+    num_responses     = num_responses
+  )
+  final_control$group_spec <- group_spec
+
+  # Pre-compute parameter index mappings for all items x groups.
+  # This replaces grep()-based lookups in the M-step hot loop with
+  # deterministic index vectors computed once during preprocessing.
+  final_control$group_param_idx <- precompute_group_indices(
+    group_spec     = group_spec,
+    num_items      = num_items,
+    item_type      = item_type,
+    num_responses  = num_responses,
+    num_predictors = num_predictors
+  )
 
   # ---- Step 12: Initialize parameter starting values ----
   # Parameter list structure: p[[1]]..p[[num_items]] = item parameters,

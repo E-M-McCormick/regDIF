@@ -399,196 +399,47 @@ Mstep_simple <-
 
           } # End looping across covariates.
 
-          # Flatten the full parameter list to a named vector for checking
-          # how many DIF parameters are currently non-zero.
-          p2 <- unlist(p)
-
-          ## Intercept DIF (c1) updates -- penalized.
-          for(cov in 1:num_predictors){
-
-
-            # Under-identification check for intercept DIF: if no anchor
-            # items were specified and all but one item already have non-zero
-            # intercept DIF on this covariate, the model is not identified.
-            # This check is only applied when alpha == 1 (pure lasso, not
-            # elastic net), the penalty grid has at least 10 values, and
-            # we are past the first penalty or no start values were given.
-            if(is.null(anchor) &
-               sum(p2[grep(paste0("c1(.*?)cov",cov),names(p2))] != 0) >
-               (num_items - 1) &
-               alpha == 1 &&
-               (length(final_control$start.values) == 0 || pen > 1) &&
-               num_tau >= 10){
-              under_identified <- TRUE
-              break
+          ## Intercept and slope DIF (c1, a1) updates -- penalized.
+          # Build a derivative closure for CFA items that captures
+          # item-specific data, keeping update_dif_groups item-type-agnostic.
+          compute_deriv_cfa <- function(family_name, p_item, cov) {
+            if (is.null(prox_data)) {
+              d_mu_gaussian(family_name, p_item, etable, theta,
+                            item_data[,item], pred_data, cov,
+                            samp_size, num_items, num_quad)
+            } else {
+              d_mu_gaussian_proxy(family_name, p_item, prox_data,
+                                  item_data[,item], pred_data, cov,
+                                  samp_size)
             }
+          }
 
-            # Identify the intercept DIF parameter index for this covariate.
-            c1_parms <-
-              grep(paste0("c1_item",item,"_cov",cov),names(p[[item]]),fixed=T)
+          dif_result <- update_dif_groups(
+            p                  = p,
+            item               = item,
+            item_type_item     = item_type[item],
+            pen_type           = pen_type,
+            tau_current        = tau_current,
+            alpha              = alpha,
+            gamma              = gamma,
+            pen                = pen,
+            pen.deriv          = pen.deriv,
+            anchor             = anchor,
+            num_items          = num_items,
+            num_predictors     = num_predictors,
+            num_tau            = num_tau,
+            max_tau            = max_tau,
+            final_control      = final_control,
+            compute_deriv_fn   = compute_deriv_cfa,
+            num_responses_item = num_responses[item]
+          )
 
-              # Compute first and second derivatives for intercept DIF.
-              if(is.null(prox_data)) {
-                anl_deriv <- d_mu_gaussian("c1",
-                                           p[[item]],
-                                           etable,
-                                           theta,
-                                           item_data[,item],
-                                           pred_data,
-                                           cov,
-                                           samp_size,
-                                           num_items,
-                                           num_quad)
-              } else{
-                anl_deriv <- d_mu_gaussian_proxy("c1",
-                                                 p[[item]],
-                                                 prox_data,
-                                                 item_data[,item],
-                                                 pred_data,
-                                                 cov,
-                                                 samp_size)
-              }
-
-              # Compute the unpenalized NR update (z_int). This is the value
-              # that would result from a standard NR step without any penalty.
-              z_int <- p[[item]][c1_parms] - anl_deriv[[1]]/anl_deriv[[2]]
-
-              # In max_tau mode, accumulate z values to find the maximum.
-              # When pen.deriv is TRUE, scale by -hessian to account for
-              # the derivative-based penalty scaling.
-              if(max_tau & pen.deriv) {
-                id_max_z <- c(id_max_z,z_int*(-anl_deriv[[2]]))
-              } else if(max_tau & !pen.deriv) {
-                id_max_z <- c(id_max_z,z_int)
-              }
-
-              # Apply the penalty thresholding operator to produce the
-              # regularized update. Group penalties (grp.lasso, grp.mcp) are
-              # handled below after the slope DIF is also computed.
-              if(!(pen_type == "grp.lasso" || pen_type == "grp.mcp")) {
-
-                if(pen.deriv) {
-                  # When pen.deriv is TRUE, tau is scaled by the inverse
-                  # Hessian: tau / (-hessian). This adapts the penalty
-                  # strength to the local curvature of the log-likelihood.
-                  p[[item]][c1_parms][[1]] <-
-                    ifelse(pen_type == "lasso",
-                           soft_threshold(z_int,alpha,tau_current/-anl_deriv[[2]]),
-                           firm_threshold(z_int,alpha,tau_current/-anl_deriv[[2]],gamma))
-                } else {
-                  # When pen.deriv is FALSE, tau is used directly without
-                  # Hessian scaling.
-                  p[[item]][c1_parms][[1]] <-
-                    ifelse(pen_type == "lasso",
-                           soft_threshold(z_int,alpha,tau_current),
-                           firm_threshold(z_int,alpha,tau_current,gamma))
-                }
-
-              }
-
-
-
-            # Under-identification check for slope DIF (same logic as for
-            # intercept DIF above, but checking a1 parameters).
-            if(is.null(anchor) &
-               sum(p2[grep(paste0("a1(.*?)cov",cov),names(p2))] != 0) >
-               (num_items - 1) &
-               alpha == 1 &&
-               (length(final_control$start.values) == 0 || pen > 1) &&
-               num_tau >= 10){
-              under_identified <- TRUE
-              break
-            }
-
-
-
-            ## Slope DIF (a1) update -- penalized, skipped for Rasch models.
-            if(item_type[item] != "rasch"){
-
-              # Identify the slope DIF parameter index for this covariate.
-              a1_parms <- grep(paste0("a1_item",item,"_cov",cov),names(p[[item]]),fixed=T)
-
-                # Compute first and second derivatives for slope DIF.
-                if(is.null(prox_data)) {
-                  anl_deriv <- d_mu_gaussian("a1",
-                                             p[[item]],
-                                             etable,
-                                             theta,
-                                             item_data[,item],
-                                             pred_data,
-                                             cov,
-                                             samp_size,
-                                             num_items,
-                                             num_quad)
-                } else {
-                  anl_deriv <- d_mu_gaussian_proxy("a1",
-                                                   p[[item]],
-                                                   prox_data,
-                                                   item_data[,item],
-                                                   pred_data,
-                                                   cov,
-                                                   samp_size)
-                }
-
-
-                # Compute the unpenalized NR update for slope DIF.
-                z_slp <- p[[item]][a1_parms] - anl_deriv[[1]]/anl_deriv[[2]]
-
-                # Accumulate z values for max_tau computation.
-                if(max_tau & pen.deriv) {
-                  id_max_z <- c(id_max_z,z_slp*(-anl_deriv[[2]]))
-                } else if(max_tau & !pen.deriv) {
-                  id_max_z <- c(id_max_z,z_slp)
-                }
-
-
-                # Apply element-wise penalty for non-group penalties.
-                if(!(pen_type == "grp.lasso" || pen_type == "grp.mcp")) {
-
-                  if(pen.deriv) {
-                    p[[item]][a1_parms][[1]] <-
-                      ifelse(pen_type == "lasso",
-                             soft_threshold(z_slp,alpha,tau_current/-anl_deriv[[2]]),
-                             firm_threshold(z_slp,alpha,tau_current/-anl_deriv[[2]],gamma))
-                  } else {
-                    p[[item]][a1_parms][[1]] <-
-                      ifelse(pen_type == "lasso",
-                             soft_threshold(z_slp,alpha,tau_current),
-                             firm_threshold(z_slp,alpha,tau_current,gamma))
-                  }
-
-                } else if(pen_type == "grp.lasso" || pen_type == "grp.mcp"){
-
-                  # Group penalty: jointly shrink the intercept DIF (z_int)
-                  # and slope DIF (z_slp) for this covariate. The group norm
-                  # ensures both are shrunk to zero together or both remain
-                  # non-zero.
-                  grp.update <-
-                    if(pen_type == "grp.lasso") {
-
-                      grp_soft_threshold(c(z_int,z_slp),
-                                         tau_current)
-
-                    } else if(pen_type == "grp.mcp") {
-
-                      grp_firm_threshold(c(z_int,z_slp),
-                                         tau_current,
-                                         gamma)
-
-                    }
-
-                    # Apply the group-penalized updates to both intercept
-                    # and slope DIF simultaneously.
-                    p[[item]][c1_parms][[1]] <- grp.update[[1]]
-                    p[[item]][a1_parms][[1]] <- grp.update[[2]]
-
-
-                }
-
-
-            } # End Rasch conditional.
-
-          } # End looping across covariates.
+          p[[item]] <- dif_result$p_item
+          if (dif_result$under_identified) {
+            under_identified <- TRUE
+            break
+          }
+          if (max_tau) id_max_z <- c(id_max_z, dif_result$id_max_z)
 
         } # End anchor item conditional.
 
@@ -660,187 +511,44 @@ Mstep_simple <-
         # Anchor items are excluded from DIF estimation.
         if(!any(item == anchor)) {
 
-          # Flatten parameters to check non-zero DIF counts.
-          p2 <- unlist(p)
-
-          ## Intercept DIF (c1) updates -- penalized.
-          for(cov in 1:num_predictors) {
-
-            # if(pen_type == "grp.lasso" || pen_type == "grp.mcp") {
-            #
-            #   # End routine if only one anchor item is left on each covariate
-            #   # for each item parameter.
-            #   if(is.null(anchor) &&
-            #      sum(p2[c(grep(paste0("c1(.*?)cov",cov),names(p2)),
-            #               grep(paste0("a1(.*?)cov",cov),names(p2)))] != 0) >
-            #      (num_items*2 - 1) &&
-            #      (length(final_control$start.values) == 0 || pen > 1) &&
-            #      num_tau >= 10){
-            #     under_identified <- TRUE
-            #     break
-            #   }
-            #
-            # }
-
-            # Under-identification check for intercept DIF: stop if all but
-            # one item already have non-zero intercept DIF on this covariate.
-            if(is.null(anchor) &
-               sum(p2[grep(paste("c1(.*?)cov",cov, sep = ""),names(p2))] != 0) >
-               (num_items - 1) &
-               alpha == 1 &&
-               (length(final_control$start.values) == 0 || pen > 1) &&
-               num_tau >= 10){
-              under_identified <- TRUE
-              break
+          # Build derivative closure for binary items.
+          compute_deriv_bin <- function(family_name, p_item, cov) {
+            if (is.null(prox_data)) {
+              d_bernoulli(family_name, p_item, etable_item, theta,
+                          pred_data, cov, samp_size, num_items, num_quad)
+            } else {
+              d_bernoulli_proxy(family_name, p_item, prox_data,
+                                pred_data, item_data[,item], cov,
+                                samp_size, num_items)
             }
+          }
 
+          dif_result <- update_dif_groups(
+            p                  = p,
+            item               = item,
+            item_type_item     = item_type[item],
+            pen_type           = pen_type,
+            tau_current        = tau_current,
+            alpha              = alpha,
+            gamma              = gamma,
+            pen                = pen,
+            pen.deriv          = pen.deriv,
+            anchor             = anchor,
+            num_items          = num_items,
+            num_predictors     = num_predictors,
+            num_tau            = num_tau,
+            max_tau            = max_tau,
+            final_control      = final_control,
+            compute_deriv_fn   = compute_deriv_bin,
+            num_responses_item = num_responses[item]
+          )
 
-              # Compute derivatives for intercept DIF.
-              if(is.null(prox_data)) {
-                anl_deriv <- d_bernoulli("c1",
-                                         p[[item]],
-                                         etable_item,
-                                         theta,
-                                         pred_data,
-                                         cov,
-                                         samp_size,
-                                         num_items,
-                                         num_quad)
-              } else {
-                anl_deriv <- d_bernoulli_proxy("c1",
-                                               p[[item]],
-                                               prox_data,
-                                               pred_data,
-                                               item_data[,item],
-                                               cov,
-                                               samp_size,
-                                               num_items)
-              }
-
-              # Compute the unpenalized NR update for intercept DIF.
-              # For binary items, the DIF intercept is stored at position
-              # (2 + cov) in the item parameter vector.
-              z_int <- p[[item]][[2+cov]] - anl_deriv[[1]]/anl_deriv[[2]]
-
-              # Accumulate z values for max_tau computation.
-              if(max_tau & pen.deriv) {
-                id_max_z <- c(id_max_z,z_int*(-anl_deriv[[2]]))
-              } else if(max_tau & !pen.deriv) {
-                id_max_z <- c(id_max_z,z_int)
-              }
-
-              # Apply element-wise penalty thresholding for non-group penalties.
-              if(!(pen_type == "grp.lasso" || pen_type == "grp.mcp")) {
-
-                if(pen.deriv) {
-                  p[[item]][[2+cov]] <-
-                    ifelse(pen_type == "lasso",
-                           soft_threshold(z_int,alpha,tau_current/-anl_deriv[[2]]),
-                           firm_threshold(z_int,alpha,tau_current/-anl_deriv[[2]],gamma))
-                } else {
-                  p[[item]][[2+cov]] <-
-                    ifelse(pen_type == "lasso",
-                           soft_threshold(z_int,alpha,tau_current),
-                           firm_threshold(z_int,alpha,tau_current,gamma))
-                }
-
-              }
-
-
-
-            # Under-identification check for slope DIF.
-            if(is.null(anchor) &
-               sum(p2[grep(paste0("a1(.*?)cov",cov),names(p2))] != 0) >
-               (num_items - 1) &
-               alpha == 1 &&
-               (length(final_control$start.values) == 0 || pen > 1) &&
-               num_tau >= 10){
-              under_identified <- TRUE
-              break
-            }
-
-            ## Slope DIF (a1) update -- penalized, skipped for Rasch models.
-            if(item_type[item] != "rasch") {
-
-
-                # Compute derivatives for slope DIF.
-                if(is.null(prox_data)) {
-                  anl_deriv <- d_bernoulli("a1",
-                                           p[[item]],
-                                           etable_item,
-                                           theta,
-                                           pred_data,
-                                           cov,
-                                           samp_size,
-                                           num_items,
-                                           num_quad)
-                } else {
-                  anl_deriv <- d_bernoulli_proxy("a1",
-                                                 p[[item]],
-                                                 prox_data,
-                                                 pred_data,
-                                                 item_data[,item],
-                                                 cov,
-                                                 samp_size,
-                                                 num_items)
-                }
-
-                # Compute the unpenalized NR update for slope DIF.
-                # For binary items, slope DIF is stored at position
-                # (2 + num_predictors + cov) in the item parameter vector.
-                z_slp <- p[[item]][[2+num_predictors+cov]] - anl_deriv[[1]]/anl_deriv[[2]]
-
-                # Accumulate z values for max_tau computation.
-                if(max_tau & pen.deriv) {
-                  id_max_z <- c(id_max_z,z_slp*(-anl_deriv[[2]]))
-                } else if(max_tau & !pen.deriv) {
-                  id_max_z <- c(id_max_z,z_slp)
-                }
-
-                # Apply element-wise penalty for non-group penalties.
-                if(!(pen_type == "grp.lasso" || pen_type == "grp.mcp")) {
-
-                  if(pen.deriv) {
-                    p[[item]][[2+num_predictors+cov]] <-
-                      ifelse(pen_type == "lasso",
-                             soft_threshold(z_slp,alpha,tau_current/-anl_deriv[[2]]),
-                             firm_threshold(z_slp,alpha,tau_current/-anl_deriv[[2]],gamma))
-                  } else {
-                    p[[item]][[2+num_predictors+cov]] <-
-                      ifelse(pen_type == "lasso",
-                             soft_threshold(z_slp,alpha,tau_current),
-                             firm_threshold(z_slp,alpha,tau_current,gamma))
-                  }
-
-                } else if(pen_type == "grp.lasso" || pen_type == "grp.mcp") {
-
-                  # Group penalty: jointly shrink intercept DIF (z_int) and
-                  # slope DIF (z_slp) for this covariate together.
-                  grp.update <-
-                    if(pen_type == "grp.lasso") {
-
-                      grp_soft_threshold(c(z_int,z_slp),
-                                         tau_current)
-
-                    } else if(pen_type == "grp.mcp") {
-
-                      grp_firm_threshold(c(z_int,z_slp),
-                                         tau_current,
-                                         gamma)
-
-                    }
-
-                  # Apply the group-penalized updates to both intercept
-                  # and slope DIF simultaneously.
-                  p[[item]][[2+cov]] <- grp.update[[1]]
-                  p[[item]][[2+num_predictors+cov]] <- grp.update[[2]]
-
-                }
-
-
-            } # End Rasch conditional.
-
-          } # End looping across covariates.
+          p[[item]] <- dif_result$p_item
+          if (dif_result$under_identified) {
+            under_identified <- TRUE
+            break
+          }
+          if (max_tau) id_max_z <- c(id_max_z, dif_result$id_max_z)
 
         } # End anchor item conditional.
 
@@ -974,154 +682,48 @@ Mstep_simple <-
         # Anchor items are excluded from DIF estimation.
         if(!any(item == anchor)){
 
-          # Flatten parameters to check non-zero DIF counts.
-          p2 <- unlist(p)
-
-          ## Intercept DIF (c1) updates -- penalized.
-          # For graded items, intercept DIF is stored at position
-          # (num_responses + cov) in the item parameter vector.
-          for(cov in 1:num_predictors) {
-
-            # Under-identification check for intercept DIF.
-            if(is.null(anchor) &
-               sum(p2[grep(paste0("c1(.*?)cov",cov),names(p2))] != 0) >
-               (num_items - 1) &
-               alpha == 1 &&
-               (length(final_control$start.values) == 0 || pen > 1) &&
-               num_tau >= 10){
-              under_identified <- TRUE
-              break
+          # Build derivative closure for graded items.
+          compute_deriv_graded <- function(family_name, p_item, cov) {
+            if (is.null(prox_data)) {
+              d_categorical(family_name, p_item, etable_item, theta,
+                            pred_data, thr=-1, cov, samp_size,
+                            num_responses[[item]], num_items, num_quad)
+            } else {
+              d_categorical_proxy(family_name, p_item, prox_data,
+                                  pred_data, item_data[,item], thr=-1,
+                                  cov, samp_size, num_responses[[item]],
+                                  num_items)
             }
+          }
 
-              # Compute derivatives for intercept DIF.
-              if(is.null(prox_data)) {
-                anl_deriv <- d_categorical("c1",
-                                           p[[item]],
-                                           etable_item,
-                                           theta,
-                                           pred_data,
-                                           thr=-1,
-                                           cov,
-                                           samp_size,
-                                           num_responses[[item]],
-                                           num_items,
-                                           num_quad)
-              } else {
-                anl_deriv <- d_categorical_proxy("c1",
-                                                 p[[item]],
-                                                 prox_data,
-                                                 pred_data,
-                                                 item_data[,item],
-                                                 thr=-1,
-                                                 cov,
-                                                 samp_size,
-                                                 num_responses[[item]],
-                                                 num_items)
-              }
+          dif_result <- update_dif_groups(
+            p                  = p,
+            item               = item,
+            item_type_item     = item_type[item],
+            pen_type           = pen_type,
+            tau_current        = tau_current,
+            alpha              = alpha,
+            gamma              = gamma,
+            pen                = pen,
+            pen.deriv          = pen.deriv,
+            anchor             = anchor,
+            num_items          = num_items,
+            num_predictors     = num_predictors,
+            num_tau            = num_tau,
+            max_tau            = max_tau,
+            final_control      = final_control,
+            compute_deriv_fn   = compute_deriv_graded,
+            num_responses_item = num_responses[item]
+          )
 
-              # Compute the unpenalized NR update for intercept DIF.
-              z <- p[[item]][[num_responses[[item]]+cov]] - anl_deriv[[1]]/anl_deriv[[2]]
+          p[[item]] <- dif_result$p_item
+          if (dif_result$under_identified) {
+            under_identified <- TRUE
+            break
+          }
+          if (max_tau) id_max_z <- c(id_max_z, dif_result$id_max_z)
 
-              # Accumulate z values for max_tau computation.
-              if(max_tau & pen.deriv) {
-                id_max_z <- c(id_max_z,z*(-anl_deriv[[2]]))
-              } else if(max_tau & !pen.deriv) {
-                id_max_z <- c(id_max_z,z)
-              }
-
-              # Apply penalty thresholding to intercept DIF.
-              if(pen.deriv) {
-                p[[item]][[num_responses[[item]]+cov]] <-
-                  ifelse(pen_type == "lasso",
-                         soft_threshold(z,alpha,tau_current/-anl_deriv[[2]]),
-                         firm_threshold(z,alpha,tau_current/-anl_deriv[[2]],gamma))
-              } else {
-                p[[item]][[num_responses[[item]]+cov]] <-
-                  ifelse(pen_type == "lasso",
-                         soft_threshold(z,alpha,tau_current),
-                         firm_threshold(z,alpha,tau_current,gamma))
-              }
-
-
-          } # End looping across covariates.
-
-          ## Slope DIF (a1) updates -- penalized, skipped for Rasch models.
-          # For graded items, slope DIF is stored at the end of the item
-          # parameter vector: position (length - num_predictors + cov).
-          for(cov in 1:num_predictors) {
-
-            # Under-identification check for slope DIF.
-            if(is.null(anchor) &
-               sum(p2[grep(paste0("a1(.*?)cov",cov),names(p2))] != 0) >
-               (num_items - 1) &
-               alpha == 1 &&
-               (length(final_control$start.values) == 0 || pen > 1) &&
-               num_tau >= 10){
-              under_identified <- TRUE
-              break
-            }
-
-            if(item_type[item] != "rasch") {
-
-
-                # Compute derivatives for slope DIF.
-                if(is.null(prox_data)) {
-                  anl_deriv <- d_categorical("a1",
-                                             p[[item]],
-                                             etable_item,
-                                             theta,
-                                             pred_data,
-                                             thr=-1,
-                                             cov,
-                                             samp_size,
-                                             num_responses[[item]],
-                                             num_items,
-                                             num_quad)
-                } else {
-                  anl_deriv <- d_categorical_proxy("a1",
-                                                   p[[item]],
-                                                   prox_data,
-                                                   pred_data,
-                                                   item_data[,item],
-                                                   thr=-1,
-                                                   cov,
-                                                   samp_size,
-                                                   num_responses[[item]],
-                                                   num_items)
-                }
-
-                # Compute the unpenalized NR update for slope DIF.
-                z <- p[[item]][[length(p[[item]])-ncol(pred_data)+cov]] -
-                  anl_deriv[[1]]/anl_deriv[[2]]
-
-                # Accumulate z values for max_tau computation.
-                if(max_tau & pen.deriv) {
-                  id_max_z <- c(id_max_z,z*(-anl_deriv[[2]]))
-                } else if(max_tau & !pen.deriv) {
-                  id_max_z <- c(id_max_z,z)
-                }
-
-
-                # Apply penalty thresholding to slope DIF.
-                if(pen.deriv) {
-                  p[[item]][[length(p[[item]])-ncol(pred_data)+cov]] <-
-                    ifelse(pen_type == "lasso",
-                           soft_threshold(z,alpha,tau_current/-anl_deriv[[2]]),
-                           firm_threshold(z,alpha,tau_current/-anl_deriv[[2]],gamma))
-                } else {
-                  p[[item]][[length(p[[item]])-ncol(pred_data)+cov]] <-
-                    ifelse(pen_type == "lasso",
-                           soft_threshold(z,alpha,tau_current),
-                           firm_threshold(z,alpha,tau_current,gamma))
-                }
-
-
-
-            } # End Rasch conditional.
-
-          } # End looping across covariates.
-
-        } # End anchor item condtional.
+        } # End anchor item conditional.
 
 
       } # End item type conditional.
@@ -1136,10 +738,29 @@ Mstep_simple <-
 
     if(max_tau) {
 
-      # In max_tau mode, return the maximum absolute unpenalized z value
-      # across all DIF parameters. This is the smallest tau value that
-      # would shrink all DIF parameters to zero.
-      id_max_z <- max(abs(unlist(id_max_z)))
+      # In max_tau mode, compute the smallest tau that zeros all DIF.
+      #
+      # For scalar penalties: max(|z|) — the largest absolute z value.
+      # For group penalties:  max_g(||z_g||_2 / w_g) — the largest
+      #   weighted group norm. This ensures the tau path is correctly
+      #   scaled when groups contain multiple covariates (e.g., spline
+      #   bases), where the L2 norm of a group can be much larger than
+      #   any individual element.
+      #
+      # For default singleton groups with w=1, both formulas give the
+      # same result (backward compatible).
+      if (pen_type %in% c("grp.lasso", "grp.mcp") &&
+          !is.null(final_control$group_spec$groups_idx)) {
+        id_max_z <- compute_max_tau_groups(
+          id_max_z   = unlist(id_max_z),
+          group_spec = final_control$group_spec,
+          num_items  = num_items,
+          item_type  = item_type,
+          anchor     = anchor
+        )
+      } else {
+        id_max_z <- max(abs(unlist(id_max_z)))
+      }
 
       return(id_max_z)
 
