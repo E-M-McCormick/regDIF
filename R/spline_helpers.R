@@ -432,3 +432,367 @@ combine_predictors <- function(...) {
     dif.groups = groups
   )
 }
+
+
+# ===========================================================================
+# EXTRACTION AND PLOTTING FOR FITTED SPLINE DIF MODELS
+#
+# These functions bridge the gap between regDIF's coefficient output
+# (individual basis coefficients like "item1.int.age_s1") and the
+# interpretable DIF curve f(x). They handle:
+#   - Extracting spline coefficients from a fitted regDIF object
+#   - Reconstructing DIF curves for plotting
+#   - Multi-item and multi-family curve plots
+# ===========================================================================
+
+
+#' Extract spline DIF coefficients from a fitted regDIF model.
+#'
+#' Given a fitted regDIF model and a spline specification, extracts the
+#' basis coefficients for a specific item and DIF family (intercept,
+#' slope, or residual) at a chosen tau value.
+#'
+#' @param fit A fitted regDIF model object (class "regDIF").
+#' @param spline_spec The output of \code{make_spline_pred()} used when
+#'   fitting the model.
+#' @param item Character or integer. Either the item name (as it appears
+#'   in row names, e.g., "item1") or the item index (e.g., 1).
+#' @param family Character. Which DIF family to extract: \code{"int"}
+#'   for intercept DIF (default), \code{"slp"} for slope DIF, or
+#'   \code{"res"} for residual variance DIF (CFA only).
+#' @param tau_index Integer or character. Which tau value to use.
+#'   If \code{"bic"} (default), uses the tau that minimizes BIC.
+#'   If \code{"aic"}, uses the tau that minimizes AIC.
+#'   If integer, uses that column index directly.
+#'
+#' @return A named numeric vector of spline basis coefficients, in the
+#'   same order as the basis columns. Returns all zeros if the spline
+#'   group was fully penalized to zero at the chosen tau.
+#'
+#' @details
+#' The function constructs row name patterns to match the regDIF output
+#' naming convention: \code{<item_name>.<family>.<basis_col_name>}.
+#' For example, with item "item1", family "int", and spline name "age"
+#' (k=6), it looks for: \code{"item1.int.age_s1"}, ...,
+#' \code{"item1.int.age_s5"}.
+#'
+#' @examples
+#' \dontrun{
+#' sp <- make_spline_pred(age, k = 6, name = "age")
+#' combined <- combine_predictors(age = sp, gender = gender)
+#' fit <- regDIF(items, combined$pred.data, pen.type = "grp.lasso",
+#'               control = list(dif.groups = combined$dif.groups))
+#'
+#' # Extract intercept DIF spline coefficients for item 1 at best BIC
+#' beta <- extract_spline_coefs(fit, sp, item = 1)
+#'
+#' # Extract slope DIF for item "math3" at best AIC
+#' beta_slp <- extract_spline_coefs(fit, sp, item = "math3",
+#'                                  family = "slp", tau_index = "aic")
+#' }
+#'
+#' @export
+extract_spline_coefs <-
+  function(fit,
+           spline_spec,
+           item,
+           family = "int",
+           tau_index = "bic") {
+
+  # Resolve tau index.
+  if (is.character(tau_index)) {
+    tau_index <- switch(tau_index,
+      "bic" = which.min(fit$bic),
+      "aic" = which.min(fit$aic),
+      stop(paste0("tau_index must be 'bic', 'aic', or an integer. Got: '",
+                  tau_index, "'"), call. = FALSE)
+    )
+  }
+
+  # Resolve item name.
+  dif_mat <- fit$dif
+  if (is.numeric(item)) {
+    # Find item names from the row names (e.g., "item1.int.age_s1" -> "item1").
+    all_rnames <- rownames(dif_mat)
+    # Extract unique item prefixes by taking everything before the first ".".
+    item_prefixes <- unique(sub("\\..*", "", all_rnames))
+    if (item > length(item_prefixes)) {
+      stop(paste0("Item index ", item, " is out of range (",
+                  length(item_prefixes), " items)."), call. = FALSE)
+    }
+    item_name <- item_prefixes[item]
+  } else {
+    item_name <- item
+  }
+
+  # Build the row name pattern for this item + family + spline.
+  basis_names <- colnames(spline_spec$basis)
+  target_names <- paste0(item_name, ".", family, ".", basis_names)
+
+  # Extract coefficients.
+  dif_col <- dif_mat[, tau_index]
+  matched <- match(target_names, names(dif_col))
+
+  if (any(is.na(matched))) {
+    missing <- target_names[is.na(matched)]
+    stop(paste0("Could not find DIF coefficients in model output: ",
+                paste(missing[1:min(3, length(missing))], collapse = ", "),
+                if (length(missing) > 3) ", ..." else ""),
+         call. = FALSE)
+  }
+
+  coefs <- dif_col[matched]
+  names(coefs) <- basis_names
+  coefs
+}
+
+
+#' Plot spline DIF curves from a fitted regDIF model.
+#'
+#' Creates publication-ready plots of nonlinear DIF functions estimated
+#' via spline bases. Can plot a single item or overlay multiple items
+#' on the same panel.
+#'
+#' @param fit A fitted regDIF model object (class "regDIF").
+#' @param spline_spec The output of \code{make_spline_pred()} used when
+#'   fitting the model.
+#' @param items Integer vector or character vector. Which items to plot.
+#'   Default is all items. Use item names or indices.
+#' @param family Character. Which DIF family to plot: \code{"int"}
+#'   (default), \code{"slp"}, or \code{"res"}.
+#' @param tau_index Integer or character. Which tau value to use.
+#'   Default is \code{"bic"}.
+#' @param x_new Optional numeric vector. Custom evaluation grid for the
+#'   x axis. If NULL, uses 200 equally-spaced points across the range
+#'   of the original covariate.
+#' @param xlab Character. X-axis label. Default uses the spline name.
+#' @param ylab Character. Y-axis label. Default is "DIF Effect".
+#' @param main Character. Plot title. Default is auto-generated.
+#' @param legend Logical. Whether to include a legend. Default is TRUE.
+#' @param cols Optional character vector of colors for each item.
+#' @param zero_line Logical. Whether to draw a horizontal line at y = 0.
+#'   Default is TRUE.
+#' @param ... Additional arguments passed to \code{plot()}.
+#'
+#' @return Invisibly returns a list of data frames (one per item), each
+#'   with columns \code{x} and \code{f_x}. Useful for further
+#'   customization with ggplot2 or other plotting systems.
+#'
+#' @details
+#' Items whose spline group was fully penalized to zero (all basis
+#' coefficients = 0) are drawn as flat lines at y = 0 and labeled
+#' as "(zero)" in the legend. This makes it visually clear which
+#' items were selected for nonlinear DIF.
+#'
+#' @examples
+#' \dontrun{
+#' sp <- make_spline_pred(age, k = 6, name = "age")
+#' combined <- combine_predictors(age = sp, gender = gender)
+#' fit <- regDIF(items, combined$pred.data, pen.type = "grp.lasso",
+#'               control = list(dif.groups = combined$dif.groups))
+#'
+#' # Plot intercept DIF curves for all items
+#' plot_spline_dif(fit, sp)
+#'
+#' # Plot only items 1 and 3, slope DIF
+#' plot_spline_dif(fit, sp, items = c(1, 3), family = "slp")
+#' }
+#'
+#' @importFrom graphics abline legend lines plot
+#' @importFrom grDevices hcl.colors
+#' @export
+plot_spline_dif <-
+  function(fit,
+           spline_spec,
+           items = NULL,
+           family = "int",
+           tau_index = "bic",
+           x_new = NULL,
+           xlab = NULL,
+           ylab = "DIF Effect",
+           main = NULL,
+           legend = TRUE,
+           cols = NULL,
+           zero_line = TRUE,
+           ...) {
+
+  # Resolve item list.
+  all_rnames <- rownames(fit$dif)
+  item_prefixes <- unique(sub("\\..*", "", all_rnames))
+
+  if (is.null(items)) {
+    items <- seq_along(item_prefixes)
+  }
+
+  # Convert numeric indices to names.
+  item_names <- character(length(items))
+  for (i in seq_along(items)) {
+    if (is.numeric(items[i])) {
+      item_names[i] <- item_prefixes[items[i]]
+    } else {
+      item_names[i] <- items[i]
+    }
+  }
+  n_items <- length(item_names)
+
+  # Default colors.
+  if (is.null(cols)) {
+    if (n_items <= 8) {
+      cols <- c("#E41A1C", "#377EB8", "#4DAF4A", "#984EA3",
+                "#FF7F00", "#A65628", "#F781BF", "#999999")[1:n_items]
+    } else {
+      cols <- grDevices::hcl.colors(n_items, palette = "Set 2")
+    }
+  }
+
+  # Extract spline name for labels.
+  spline_name <- names(spline_spec$dif.groups)[1]
+  if (is.null(xlab)) xlab <- spline_name
+  if (is.null(main)) {
+    family_label <- switch(family,
+                           "int" = "Intercept", "slp" = "Slope",
+                           "res" = "Residual Variance", family)
+    main <- paste(family_label, "DIF:", spline_name)
+  }
+
+  # Compute curves for all items.
+  curves <- list()
+  y_range <- c(0, 0)
+
+  for (i in seq_along(item_names)) {
+    coefs <- extract_spline_coefs(fit, spline_spec,
+                                  item = item_names[i],
+                                  family = family,
+                                  tau_index = tau_index)
+    curve_df <- predict_spline_dif(spline_spec, coefs, x_new = x_new)
+    curves[[item_names[i]]] <- curve_df
+    y_range <- range(y_range, curve_df$f_x)
+  }
+
+  # Add some padding to y range.
+  y_pad <- diff(y_range) * 0.05
+  if (y_pad == 0) y_pad <- 0.1
+  y_range <- y_range + c(-y_pad, y_pad)
+
+  # Draw the plot.
+  x_vals <- curves[[1]]$x
+  plot(x_vals, rep(0, length(x_vals)),
+       type = "n",
+       xlim = range(x_vals),
+       ylim = y_range,
+       xlab = xlab, ylab = ylab, main = main,
+       ...)
+
+  if (zero_line) abline(h = 0, lty = 2, col = "gray60")
+
+  # Draw each item's curve.
+  legend_labels <- character(n_items)
+  legend_ltys <- integer(n_items)
+  for (i in seq_along(item_names)) {
+    curve_df <- curves[[item_names[i]]]
+    is_zero <- all(abs(curve_df$f_x) < 1e-10)
+    lty_val <- if (is_zero) 3 else 1
+    lwd_val <- if (is_zero) 1 else 2
+
+    lines(curve_df$x, curve_df$f_x,
+          col = cols[i], lty = lty_val, lwd = lwd_val)
+
+    legend_labels[i] <- if (is_zero) {
+      paste0(item_names[i], " (zero)")
+    } else {
+      item_names[i]
+    }
+    legend_ltys[i] <- lty_val
+  }
+
+  # Legend.
+  if (legend && n_items > 1) {
+    graphics::legend("topleft",
+                     legend = legend_labels,
+                     col = cols,
+                     lty = legend_ltys,
+                     lwd = 2,
+                     cex = 0.75,
+                     bty = "n")
+  }
+
+  invisible(curves)
+}
+
+
+#' Compute L2 norm summary of spline DIF across the tau path.
+#'
+#' For each item and tau value, computes the L2 norm of the spline
+#' basis coefficients: \code{||beta_g||_2 = sqrt(sum(beta^2))}. This
+#' provides a single scalar summary of "how much" nonlinear DIF exists
+#' for each item at each penalty level, analogous to the scalar
+#' coefficient paths in the standard regularization plot.
+#'
+#' @param fit A fitted regDIF model object.
+#' @param spline_spec The output of \code{make_spline_pred()}.
+#' @param items Integer or character vector. Which items. Default: all.
+#' @param family Character. DIF family (\code{"int"}, \code{"slp"},
+#'   \code{"res"}). Default: \code{"int"}.
+#'
+#' @return A matrix with rows = items and columns = tau values,
+#'   containing the L2 norm of the spline DIF coefficients.
+#'
+#' @details
+#' This is useful for creating regularization path plots that show
+#' the "strength" of nonlinear DIF as a single line per item, rather
+#' than k-1 separate lines for each basis coefficient. The L2 norm
+#' is the natural summary because it's what the group lasso penalty
+#' operates on.
+#'
+#' @examples
+#' \dontrun{
+#' norms <- spline_dif_norms(fit, sp)
+#' matplot(log(fit$tau_vec), t(norms), type = "l",
+#'         xlab = "log(tau)", ylab = "||DIF(x)||")
+#' }
+#'
+#' @export
+spline_dif_norms <-
+  function(fit,
+           spline_spec,
+           items = NULL,
+           family = "int") {
+
+  # Resolve item list.
+  all_rnames <- rownames(fit$dif)
+  item_prefixes <- unique(sub("\\..*", "", all_rnames))
+
+  if (is.null(items)) {
+    items <- seq_along(item_prefixes)
+  }
+
+  item_names <- character(length(items))
+  for (i in seq_along(items)) {
+    if (is.numeric(items[i])) {
+      item_names[i] <- item_prefixes[items[i]]
+    } else {
+      item_names[i] <- items[i]
+    }
+  }
+
+  basis_names <- colnames(spline_spec$basis)
+  n_tau <- ncol(fit$dif)
+  n_items <- length(item_names)
+
+  norms <- matrix(NA_real_, nrow = n_items, ncol = n_tau)
+  rownames(norms) <- item_names
+
+  for (i in seq_along(item_names)) {
+    target_names <- paste0(item_names[i], ".", family, ".", basis_names)
+    matched <- match(target_names, rownames(fit$dif))
+
+    if (any(is.na(matched))) next
+
+    for (t in 1:n_tau) {
+      coefs <- fit$dif[matched, t]
+      norms[i, t] <- sqrt(sum(coefs^2))
+    }
+  }
+
+  norms
+}
